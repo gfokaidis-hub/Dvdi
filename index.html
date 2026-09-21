@@ -1,9 +1,40 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'><meta name='theme-color' content='#101318'><link rel='manifest' href='manifest.webmanifest'><title>DVDI Scanner</title><style>body{font-family:system-ui;background:#101318;color:#eee;margin:0;padding:20px}.wrap{max-width:650px;margin:auto}h1{font-size:24px}.sub{color:#9aa4b2}.card{background:#1a1f27;border:1px solid #303844;border-radius:18px;padding:18px;margin:14px 0}.row{display:flex;justify-content:space-between;gap:12px;margin:8px 0}.up{color:#20d68f}.down{color:#ff5470}.muted{color:#9aa4b2}button{width:100%;padding:14px;border:0;border-radius:12px;font-weight:700;font-size:16px}small{color:#9aa4b2}</style></head><body><div class='wrap'><h1>DVDI Scanner</h1><div class='sub'>Binance Spot • 4H • DVDI 255/1</div><div id='cards'></div><button onclick='refresh()'>Refresh now</button><p><small>Signals use completed 4-hour candles only. BUY = DVDI changes falling→rising; SELL = rising→falling. This version does not place trades.</small></p></div><script>
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'><meta name='theme-color' content='#101318'><link rel='manifest' href='manifest.webmanifest'><title>DVDI Scanner</title><style>body{font-family:system-ui;background:#101318;color:#eee;margin:0;padding:20px}.wrap{max-width:650px;margin:auto}h1{font-size:24px}.sub{color:#9aa4b2}.card{background:#1a1f27;border:1px solid #303844;border-radius:18px;padding:18px;margin:14px 0}.row{display:flex;justify-content:space-between;gap:12px;margin:8px 0}.up{color:#20d68f}.down{color:#ff5470}.muted{color:#9aa4b2}button{width:100%;padding:14px;border:0;border-radius:12px;font-weight:700;font-size:16px}small{color:#9aa4b2}</style></head><body><div class='wrap'><h1>DVDI Scanner</h1><div class='sub'>Binance Spot • 4H • DVDI 255/1 • V2</div><div id='cards'></div><button onclick='refresh()'>Refresh now</button><p><small>Signals use completed 4-hour candles only. BUY = DVDI changes falling→rising; SELL = rising→falling. This version does not place trades.</small></p></div><script>
 const symbols=['BTCUSDT','KAITOUSDT'];
 function ema(a,n){let out=[],prev=null,k=2/(n+1);for(const x of a){prev=prev===null?x:(x-prev)*k+prev;out.push(prev)}return out}
-function dvdi(rows){let pvi=0,nvi=0,p=[],n=[],vol=[],close=[];for(let i=0;i<rows.length;i++){let r=rows[i],v=+r[5],c=+r[4];vol.push(v);close.push(c);if(i){if(v>vol[i-1])pvi+=c-close[i-1];if(v<vol[i-1])nvi-=c-close[i-1]}p.push(pvi);n.push(nvi)}let ps=ema(p,255),ns=ema(n,255);let pd=ema(p.map((x,i)=>x-ps[i]),1),nd=ema(n.map((x,i)=>x-ns[i]),1);return pd.map((x,i)=>x-nd[i])}
-async function one(s){let u=`https://api.binance.com/api/v3/klines?symbol=${s}&interval=4h&limit=1000`;let r=await fetch(u);if(!r.ok)throw Error(r.status);let rows=await r.json();let now=Date.now();rows=rows.filter(x=>+x[6]<now);let d=dvdi(rows),i=d.length-1,a=d[i],b=d[i-1],c=d[i-2];let dir=a>b?'RISING':a<b?'FALLING':'FLAT',sig=(a>b&&b<=c)?'BUY':(a<b&&b>=c)?'SELL':'—';return {s,price:+rows[i][4],d:a,dir,sig,t:+rows[i][6]}}
+function dvdi(rows){
+  // Match Donovan Wall's Pine logic, including first-bar PVI initialization.
+  let pvi=0,nvi=0,p=[],n=[],vol=[],close=[];
+  for(let i=0;i<rows.length;i++){
+    const v=+rows[i][5], c=+rows[i][4];
+    const pv=i?vol[i-1]:0, pc=i?close[i-1]:0;
+    vol.push(v); close.push(c);
+    if(v>pv) pvi += c-pc;
+    if(v<pv) nvi -= c-pc;
+    p.push(pvi); n.push(nvi);
+  }
+  const ps=ema(p,255), ns=ema(n,255);
+  const pd=ema(p.map((x,i)=>x-ps[i]),1);
+  const nd=ema(n.map((x,i)=>x-ns[i]),1);
+  return {pd,nd,d:pd.map((x,i)=>x-nd[i])};
+}
+async function one(s){
+  const u=`https://api.binance.com/api/v3/klines?symbol=${s}&interval=4h&limit=1000`;
+  const r=await fetch(u); if(!r.ok)throw Error(r.status);
+  let rows=await r.json(), now=Date.now();
+  rows=rows.filter(x=>+x[6]<now);
+  const z=dvdi(rows), d=z.d, i=d.length-1;
+  const a=d[i], b=d[i-1];
+  const dir=a>b?'RISING':a<b?'FALLING':'FLAT';
+  // Ignore early warm-up bars and find the most recent confirmed reversal.
+  let last=null;
+  for(let j=Math.max(257,2);j<=i;j++){
+    if(d[j]>d[j-1] && d[j-1]<=d[j-2]) last={sig:'BUY',idx:j};
+    else if(d[j]<d[j-1] && d[j-1]>=d[j-2]) last={sig:'SELL',idx:j};
+  }
+  return {s,price:+rows[i][4],p:z.pd[i],n:z.nd[i],d:a,dir,
+          sig:last?last.sig:'—',sigT:last?+rows[last.idx][6]:null,t:+rows[i][6]};
+}
 function fmt(x){return Math.abs(x)>=100?x.toFixed(2):x.toFixed(5)}
-async function refresh(){let el=document.getElementById('cards');el.innerHTML='<div class="card">Loading Binance 4H data…</div>';try{let a=await Promise.all(symbols.map(one));el.innerHTML=a.map(x=>`<div class='card'><div class='row'><b>${x.s.replace('USDT',' / USDT')}</b><b>$${x.price.toLocaleString()}</b></div><div class='row'><span class='muted'>DVDI</span><span>${fmt(x.d)}</span></div><div class='row'><span class='muted'>Direction</span><b class='${x.dir==='RISING'?'up':x.dir==='FALLING'?'down':''}'>${x.dir==='RISING'?'▲ ':x.dir==='FALLING'?'▼ ':''}${x.dir}</b></div><div class='row'><span class='muted'>Latest reversal</span><b class='${x.sig==='BUY'?'up':x.sig==='SELL'?'down':''}'>${x.sig}</b></div><div class='row'><span class='muted'>4H candle closed</span><span>${new Date(x.t).toLocaleString()}</span></div></div>`).join('')}catch(e){el.innerHTML=`<div class='card down'>Could not load Binance data (${e.message}). Try Refresh.</div>`}}
+async function refresh(){let el=document.getElementById('cards');el.innerHTML='<div class="card">Loading Binance 4H data…</div>';try{let a=await Promise.all(symbols.map(one));el.innerHTML=a.map(x=>`<div class='card'><div class='row'><b>${x.s.replace('USDT',' / USDT')}</b><b>$${x.price.toLocaleString()}</b></div><div class='row'><span class='muted'>PVI Divergence</span><span>${fmt(x.p)}</span></div><div class='row'><span class='muted'>NVI Divergence</span><span>${fmt(x.n)}</span></div><div class='row'><span class='muted'>DVDI (PVI − NVI)</span><span>${fmt(x.d)}</span></div><div class='row'><span class='muted'>Direction</span><b class='${x.dir==='RISING'?'up':x.dir==='FALLING'?'down':''}'>${x.dir==='RISING'?'▲ ':x.dir==='FALLING'?'▼ ':''}${x.dir}</b></div><div class='row'><span class='muted'>Latest reversal</span><b class='${x.sig==='BUY'?'up':x.sig==='SELL'?'down':''}'>${x.sig}</b></div><div class='row'><span class='muted'>Reversal candle</span><span>${x.sigT?new Date(x.sigT).toLocaleString():'—'}</span></div><div class='row'><span class='muted'>4H candle closed</span><span>${new Date(x.t).toLocaleString()}</span></div></div>`).join('')}catch(e){el.innerHTML=`<div class='card down'>Could not load Binance data (${e.message}). Try Refresh.</div>`}}
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');refresh();
 </script></body></html>
